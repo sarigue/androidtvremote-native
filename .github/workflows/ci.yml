@@ -1,0 +1,350 @@
+name: Quality, build and release
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Code quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the sources
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libboost-dev libssl-dev ninja-build
+
+      - name: Configure with warnings as errors
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+          -DBUILD_SHARED_LIBS=OFF
+          -DANDROIDTVREMOTE_BUILD_EXAMPLES=ON
+          -DANDROIDTVREMOTE_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  linux:
+    name: Linux / ${{ matrix.arch }}
+    needs: quality
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out the sources
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libboost-dev libssl-dev ninja-build
+
+      - name: Configure
+        shell: bash
+        run: |
+          for linkage in static shared; do
+            shared=OFF
+            [[ "$linkage" == "shared" ]] && shared=ON
+            cmake -S . -B "build-$linkage" -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_SHARED_LIBS="$shared" \
+              -DANDROIDTVREMOTE_BUILD_EXAMPLES=ON \
+              -DANDROIDTVREMOTE_BUILD_TESTS=ON
+          done
+
+      - name: Build and test
+        shell: bash
+        run: |
+          for linkage in static shared; do
+            cmake --build "build-$linkage" --parallel
+            ctest --test-dir "build-$linkage" --output-on-failure
+          done
+
+      - name: Install
+        run: |
+          cmake --install build-static --prefix stage-static
+          cmake --install build-shared --prefix stage-shared
+
+      - name: Collect libraries
+        run: |
+          mkdir release-assets
+          cp -L stage-static/lib/libandroidtvremote.a \
+            release-assets/libandroidtvremote-linux-${{ matrix.arch }}.a
+          cp -L stage-shared/lib/libandroidtvremote.so \
+            release-assets/libandroidtvremote-linux-${{ matrix.arch }}.so
+
+      - name: Upload libraries
+        uses: actions/upload-artifact@v7
+        with:
+          name: androidtvremote-linux-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-slices:
+    name: macOS / ${{ matrix.arch }}
+    needs: quality
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+
+    steps:
+      - name: Check out the sources
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: brew install boost openssl@3 ninja
+
+      - name: Configure
+        shell: bash
+        run: |
+          for linkage in static shared; do
+            shared=OFF
+            [[ "$linkage" == "shared" ]] && shared=ON
+            cmake -S . -B "build-$linkage" -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+              -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+              -DBUILD_SHARED_LIBS="$shared" \
+              -DANDROIDTVREMOTE_BUILD_EXAMPLES=ON \
+              -DANDROIDTVREMOTE_BUILD_TESTS=ON
+          done
+
+      - name: Build and test
+        shell: bash
+        run: |
+          for linkage in static shared; do
+            cmake --build "build-$linkage" --parallel
+            ctest --test-dir "build-$linkage" --output-on-failure
+          done
+
+      - name: Install
+        run: |
+          cmake --install build-static --prefix stage-static
+          cmake --install build-shared --prefix stage-shared
+
+      - name: Collect architecture slices
+        run: |
+          mkdir macos-slices
+          cp -L stage-static/lib/libandroidtvremote.a \
+            macos-slices/libandroidtvremote-${{ matrix.arch }}.a
+          cp -L stage-shared/lib/libandroidtvremote.dylib \
+            macos-slices/libandroidtvremote-${{ matrix.arch }}.dylib
+
+      - name: Upload architecture slices
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-slice-${{ matrix.arch }}
+          path: macos-slices/*
+          if-no-files-found: error
+          retention-days: 1
+
+  macos:
+    name: macOS / universal
+    needs: macos-slices
+    runs-on: macos-15
+    timeout-minutes: 10
+
+    steps:
+      - name: Download architecture slices
+        uses: actions/download-artifact@v8
+        with:
+          pattern: macos-slice-*
+          path: macos-slices
+          merge-multiple: true
+
+      - name: Create universal libraries
+        run: |
+          mkdir release-assets
+          lipo -create \
+            macos-slices/libandroidtvremote-x86_64.a \
+            macos-slices/libandroidtvremote-arm64.a \
+            -output release-assets/libandroidtvremote-macos.a
+          lipo -create \
+            macos-slices/libandroidtvremote-x86_64.dylib \
+            macos-slices/libandroidtvremote-arm64.dylib \
+            -output release-assets/libandroidtvremote-macos.dylib
+          lipo release-assets/libandroidtvremote-macos.a \
+            -verify_arch x86_64 arm64
+          lipo release-assets/libandroidtvremote-macos.dylib \
+            -verify_arch x86_64 arm64
+
+      - name: Upload universal libraries
+        uses: actions/upload-artifact@v7
+        with:
+          name: androidtvremote-macos-universal
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows / ${{ matrix.arch }}
+    needs: quality
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+            cmake_arch: x64
+            triplet: x64-windows
+            dlltool_machine: i386:x86-64
+          - arch: arm64
+            runner: windows-11-arm
+            cmake_arch: ARM64
+            triplet: arm64-windows
+            dlltool_machine: arm64
+
+    steps:
+      - name: Check out the sources
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v6
+        with:
+          path: build/vcpkg_installed
+          key: vcpkg-windows-${{ matrix.arch }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          foreach ($linkage in @("static", "shared")) {
+            $shared = if ($linkage -eq "shared") { "ON" } else { "OFF" }
+            cmake -S . -B "build-$linkage" -A "${{ matrix.cmake_arch }}" `
+              -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+              -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE/build/vcpkg_installed" `
+              -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} `
+              -DBUILD_SHARED_LIBS="$shared" `
+              -DANDROIDTVREMOTE_BUILD_EXAMPLES=ON `
+              -DANDROIDTVREMOTE_BUILD_TESTS=ON
+          }
+
+      - name: Build and test
+        shell: pwsh
+        run: |
+          foreach ($linkage in @("static", "shared")) {
+            cmake --build "build-$linkage" --config Release --parallel
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            ctest --test-dir "build-$linkage" --build-config Release --output-on-failure
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Install
+        run: |
+          cmake --install build-static --config Release --prefix stage-static
+          cmake --install build-shared --config Release --prefix stage-shared
+
+      - name: Collect libraries
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release-assets
+          Copy-Item stage-static/lib/androidtvremote_static.lib `
+            release-assets/libandroidtvremote-win-${{ matrix.arch }}_static.lib
+          Copy-Item stage-shared/lib/androidtvremote.lib `
+            release-assets/libandroidtvremote-win-${{ matrix.arch }}.lib
+
+          $dll = "stage-shared/bin/androidtvremote.dll"
+          $releaseDll = "release-assets/libandroidtvremote-win-${{ matrix.arch }}.dll"
+          $definition = "release-assets/androidtvremote-${{ matrix.arch }}.def"
+          $importLibrary = "release-assets/libandroidtvremote-win-${{ matrix.arch }}.dll.a"
+          Copy-Item $dll $releaseDll
+
+          $exports = llvm-readobj --coff-exports $dll |
+            Select-String '^\s*Name: (.+)$' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($exports.Count -eq 0) {
+            throw "No exports found in $dll"
+          }
+
+          @("LIBRARY androidtvremote.dll", "EXPORTS") + $exports |
+            Set-Content -Encoding ascii $definition
+          llvm-dlltool -m "${{ matrix.dlltool_machine }}" `
+            -d $definition -D androidtvremote.dll -l $importLibrary
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path $importLibrary)) {
+            throw "Import library was not created: $importLibrary"
+          }
+          Remove-Item $definition
+
+      - name: Upload libraries
+        uses: actions/upload-artifact@v7
+        with:
+          name: androidtvremote-windows-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all release libraries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: androidtvremote-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release-assets/* \
+              --verify-tag \
+              --generate-notes \
+              --title "$GITHUB_REF_NAME"
+          fi

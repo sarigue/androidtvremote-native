@@ -1,0 +1,15 @@
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
+
+if(DEFINED ENV{LLVM_MINGW_ROOT} AND NOT "$ENV{LLVM_MINGW_ROOT}" STREQUAL "")
+    set(_llvm_mingw_bin "$ENV{LLVM_MINGW_ROOT}/bin")
+    set(CMAKE_C_COMPILER "${_llvm_mingw_bin}/x86_64-w64-mingw32-clang" CACHE FILEPATH "")
+    set(CMAKE_CXX_COMPILER "${_llvm_mingw_bin}/x86_64-w64-mingw32-clang++" CACHE FILEPATH "")
+    set(CMAKE_RC_COMPILER "${_llvm_mingw_bin}/x86_64-w64-mingw32-windres" CACHE FILEPATH "")
+else()
+    set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc CACHE FILEPATH "")
+    set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++ CACHE FILEPATH "")
+    set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres CACHE FILEPATH "")
+endif()
+
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)

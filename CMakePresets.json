@@ -1,0 +1,38 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "static",
+      "displayName": "Static library",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-static",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "OFF",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "shared",
+      "displayName": "Shared library",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-shared-preset",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "static", "configurePreset": "static"},
+    {"name": "shared", "configurePreset": "shared"}
+  ],
+  "testPresets": [
+    {"name": "static", "configurePreset": "static", "output": {"outputOnFailure": true}},
+    {"name": "shared", "configurePreset": "shared", "output": {"outputOnFailure": true}}
+  ]
+}
