@@ -1,0 +1,53 @@
+# CMake and build outputs
+/build/
+/build-*/
+/build-cross/
+/out/
+/dist/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+install_manifest.txt
+Testing/
+*.ninja
+.ninja_deps
+.ninja_log
+
+# Compiled binaries and libraries
+*.a
+*.dll
+*.dylib
+*.exe
+*.lib
+*.o
+*.obj
+*.pdb
+*.so
+*.so.*
+
+# Local credentials and generated certificates
+*.key
+*.pem
+certs/
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.code-workspace
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+*~
+

@@ -1,0 +1,10 @@
+androidtvremote-native
+Copyright 2026 Freebox Pop Remote contributors
+
+This project is an independent native implementation of the Android TV Remote v2
+protocol. Protocol behavior was studied from publicly available implementations
+and specifications, including tronikos/androidtvremote2 (Apache License 2.0) and
+AOSP's Google TV pairing protocol materials.
+
+Android, Google TV and related names are trademarks of their respective owners.
+This project is not affiliated with or endorsed by Google.
