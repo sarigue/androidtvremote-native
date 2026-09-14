@@ -30,29 +30,33 @@ public:
     SyncTlsConnection(
         const std::filesystem::path& certificateFile,
         const std::filesystem::path& privateKeyFile)
-        : context_(asio::ssl::context::tls_client), stream_(io_, context_) {
+        : context_(asio::ssl::context::tls_client) {
         context_.set_verify_mode(asio::ssl::verify_none);
         crypto::loadClientIdentity(context_.native_handle(), certificateFile, privateKeyFile);
+        // ssl::stream creates its SSL object from the context.  Load the
+        // client identity first so mutual-TLS servers receive the certificate.
+        stream_ = std::make_unique<asio::ssl::stream<tcp::socket>>(io_, context_);
     }
 
     void connect(const std::string& host, std::uint16_t port) {
         tcp::resolver resolver(io_);
         const auto endpoints = resolver.resolve(host, std::to_string(port));
-        asio::connect(stream_.next_layer(), endpoints);
-        stream_.handshake(asio::ssl::stream_base::client);
+        asio::connect(stream_->next_layer(), endpoints);
+        stream_->handshake(asio::ssl::stream_base::client);
     }
 
     void close() noexcept {
         boost::system::error_code ignored;
-        stream_.shutdown(ignored);
-        stream_.next_layer().close(ignored);
+        if (!stream_) return;
+        stream_->shutdown(ignored);
+        stream_->next_layer().close(ignored);
     }
 
     ~SyncTlsConnection() { close(); }
 
     void send(std::span<const std::uint8_t> payload) {
         const auto framed = wire::frame(payload);
-        asio::write(stream_, asio::buffer(framed));
+        asio::write(*stream_, asio::buffer(framed));
     }
 
     std::vector<std::uint8_t> receive() {
@@ -60,7 +64,7 @@ public:
         unsigned shift = 0;
         while (true) {
             std::uint8_t byte = 0;
-            asio::read(stream_, asio::buffer(&byte, 1));
+            asio::read(*stream_, asio::buffer(&byte, 1));
             length |= static_cast<std::uint64_t>(byte & 0x7fU) << shift;
             if ((byte & 0x80U) == 0) break;
             shift += 7;
@@ -71,23 +75,23 @@ public:
         }
         std::vector<std::uint8_t> payload(static_cast<std::size_t>(length));
         if (!payload.empty()) {
-            asio::read(stream_, asio::buffer(payload));
+            asio::read(*stream_, asio::buffer(payload));
         }
         return payload;
     }
 
     X509* peerCertificate() {
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
-        return SSL_get1_peer_certificate(stream_.native_handle());
+        return SSL_get1_peer_certificate(stream_->native_handle());
 #else
-        return SSL_get_peer_certificate(stream_.native_handle());
+        return SSL_get_peer_certificate(stream_->native_handle());
 #endif
     }
 
 private:
     asio::io_context io_;
     asio::ssl::context context_;
-    asio::ssl::stream<tcp::socket> stream_;
+    std::unique_ptr<asio::ssl::stream<tcp::socket>> stream_;
 };
 
 std::unique_ptr<X509, decltype(&X509_free)> loadCertificate(const std::filesystem::path& path) {

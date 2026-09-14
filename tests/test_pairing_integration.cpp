@@ -202,9 +202,11 @@ int main() {
 
     asio::io_context io;
     asio::ssl::context serverContext(asio::ssl::context::tls_server);
-    serverContext.set_verify_mode(asio::ssl::verify_none);
     serverContext.use_certificate_chain_file(certPath.string());
     serverContext.use_private_key_file(keyPath.string(), asio::ssl::context::pem);
+    serverContext.load_verify_file(certPath.string());
+    serverContext.set_verify_mode(
+        asio::ssl::verify_peer | asio::ssl::verify_fail_if_no_peer_cert);
     tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
     const auto port = acceptor.local_endpoint().port();
 
